@@ -2577,6 +2577,13 @@ class SchedulerDisaggregationDecodeMixin:
                 else:
                     running_batch.merge_batch(new_prebuilt_batch)
 
+        from sglang.srt.disaggregation.decode_local import manager_for
+        local = manager_for(self)
+        if local is not None:
+            local_batch, running_batch = local.next_batch(running_batch)
+            if local_batch is not None:
+                return NextBatchPlan(batch_to_run=local_batch, running_batch=running_batch)
+
         # Schedule decode batch
         if running_batch.is_empty():
             ret = None
@@ -2665,6 +2672,10 @@ class SchedulerDisaggregationDecodeMixin:
         return new_batch
 
     def process_decode_queue(self: Scheduler):
+        from sglang.srt.disaggregation.decode_local import manager_for
+        local = manager_for(self)
+        if local is not None:
+            local.store.expire()
         if self.enable_decode_hicache:
             self.tree_cache.check_hicache_events()
 

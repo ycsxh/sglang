@@ -282,3 +282,6 @@ artifacts/
 
 # Internal, non-published docs
 internal-docs/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

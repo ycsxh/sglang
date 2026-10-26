@@ -252,6 +252,9 @@ def retraction_discard(req: Req, tree_cache: BasePrefixCache, backend: str) -> N
 
 
 def release_kv_cache(req: Req, tree_cache: BasePrefixCache, is_insert: bool = True):
+    manager = getattr(tree_cache, "decode_local_manager", None)
+    if manager is not None and req.kv.holds_kv and manager.retain(req):
+        return
     assert (not req.kv.holds_kv) == req.kv.is_kv_released
     # MambaRadixCache may alloc mamba state before alloc KV cache
     if not req.kv.holds_kv:

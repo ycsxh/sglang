@@ -905,6 +905,7 @@ if os.environ.get("DUMPER_SERVER_PORT") == "reuse":
     methods=["POST", "PUT"],
     response_class=SGLangORJSONResponse,
 )
+@app.post("/try_local_generate")
 async def generate_request(obj: GenerateReqInput, request: Request):
     """Handle a generate request."""
     if envs.SGLANG_ENABLE_REQUEST_HEADER_OVERRIDES.get():

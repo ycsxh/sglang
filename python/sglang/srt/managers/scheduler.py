@@ -2670,9 +2670,18 @@ class Scheduler(
                     return
 
             if self.disaggregation_mode != DisaggregationMode.NULL:
+                # Opt-in local attempts have no PD bootstrap. Admission still
+                # occurs atomically on the scheduler before any computation.
+                from sglang.srt.disaggregation.decode_local import identity
+                local_identity = identity(req.rid)
+                local_attempt = (os.environ.get("SGLANG_DECODE_LOCAL_CONFIG")
+                                 and self.disaggregation_mode == DisaggregationMode.DECODE
+                                 and local_identity is not None
+                                 and local_identity["op"] in ("local", "close"))
                 # Invalid request for disaggregated mode
                 if (
                     recv_req.bootstrap_room is None
+                    and not local_attempt
                     and self.transfer_backend != TransferBackend.FAKE
                 ):
                     error_msg = (
@@ -3031,6 +3040,10 @@ class Scheduler(
             )
             req.time_stats.set_prefill_bootstrap_queue_entry_time()
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
+            from sglang.srt.disaggregation.decode_local import manager_for
+            manager = manager_for(self)
+            if manager is not None and not is_retracted and manager.handle(req):
+                return
             self.disagg_decode_prealloc_queue.add(req, is_retracted=is_retracted)
             if not is_retracted:
                 req.time_stats.set_decode_prealloc_queue_entry_time()
@@ -4482,6 +4495,10 @@ class Scheduler(
 
     def on_idle(self):
         """Idle housekeeping: guard, check, metrics, reset, sleep."""
+        local = getattr(self, "decode_local_manager", None)
+        if local is not None and (local.store.leases or local.queue):
+            self.maybe_send_health_check_signal()
+            return  # poll bounded TTLs; do not sleep across their deadlines
         # Flush any health-check signal deferred while the engine was busy.
         self.maybe_send_health_check_signal()
 
@@ -4517,7 +4534,9 @@ class Scheduler(
             self.disaggregation_mode == DisaggregationMode.DECODE
             and self.disagg_decode_transfer_queue.has_pending_deferred_releases()
         )
-        if not self.enable_hisparse and not deferred_pending:
+        local = getattr(self, "decode_local_manager", None)
+        local_pending = local is not None and (local.store.leases or local.active)
+        if not self.enable_hisparse and not deferred_pending and not local_pending:
             has_leak, messages = self.invariant_checker._check_all_pools(
                 self.pool_stats_observer.get_pool_stats(),
             )
