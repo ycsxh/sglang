@@ -2,7 +2,9 @@
 
 import importlib.util
 import sys
+from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +16,41 @@ spec = importlib.util.spec_from_file_location("decode_local_under_test", path)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+
+
+def test_optional_occupancy_is_bounded_and_does_not_consume_state(monkeypatch, store):
+    manager = module.DecodeLocalManager.__new__(module.DecodeLocalManager)
+    manager.config = {"occupancy_interval_ns": 100}
+    manager.queue = deque([object()])
+    manager.active = {"request": object()}
+    manager.store = store
+    manager._occupancy_at_ns = 0
+    manager._occupancy_previous = None
+    events = []
+    manager.record = lambda event, **fields: events.append((event, fields))
+    running = SimpleNamespace(reqs=[object(), object()])
+    now = [1000]
+    monkeypatch.setattr(module.time, "monotonic_ns", lambda: now[0])
+    manager.record_occupancy(running)
+    manager.record_occupancy(running)
+    assert len(events) == 1
+    assert events[0][1]["queued_local"] == 1
+    assert events[0][1]["running_decode"] == 2
+    assert len(manager.queue) == len(manager.active) == 1
+    assert not store.releases and not store.seen
+    now[0] += 100
+    manager.queue.clear()
+    manager.active.clear()
+    running.reqs.clear()
+    manager.record_occupancy(running)
+    now[0] += 100
+    manager.record_occupancy(running)
+    assert len(events) == 2
+    manager.config["occupancy_interval_ns"] = 0
+    manager.queue.append(object())
+    now[0] += 100
+    manager.record_occupancy(running)
+    assert len(events) == 2
 
 
 def ident(turn=0, request="a", predecessor=None, op="pd", **extra):

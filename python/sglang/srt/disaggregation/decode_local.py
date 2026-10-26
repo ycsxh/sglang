@@ -216,6 +216,8 @@ class DecodeLocalManager:
         self.active = {}
         self.after_prefill = None
         self.decode_due = False
+        self._occupancy_at_ns = 0
+        self._occupancy_previous = None
         self.store = LeaseStore(config, self.release, self.record)
         scheduler.tree_cache.decode_local_manager = self
         self.record("start", config=config)
@@ -419,10 +421,46 @@ class DecodeLocalManager:
                     "cancelled", identity=req.decode_local_identity, queued=False
                 )
 
+    def record_occupancy(self, running):
+        """Optional scheduler-owned queue/lease gauges, independent of HTTP slots.
+
+        Counts describe resident scheduler work, not simultaneous GPU kernels.
+        Sampling is opt-in and bounded; lease/execution ownership is untouched.
+        """
+        interval = self.config.get("occupancy_interval_ns", 0)
+        if interval <= 0:
+            return
+        now = time.monotonic_ns()
+        counts = (
+            len(self.queue),
+            len(self.active),
+            len(running.reqs),
+            len(self.store.leases),
+            self.store.bytes,
+            len(self.store.seen),
+        )
+        idle = not any(counts[:4])
+        if now - self._occupancy_at_ns < interval:
+            return
+        if idle and counts == self._occupancy_previous:
+            return
+        self._occupancy_at_ns = now
+        self._occupancy_previous = counts
+        self.record(
+            "occupancy",
+            queued_local=counts[0],
+            active_local=counts[1],
+            running_decode=counts[2],
+            leases=counts[3],
+            pin_bytes=counts[4],
+            seen_requests=counts[5],
+        )
+
     def next_batch(self, running):
         from sglang.srt.managers.schedule_batch import ScheduleBatch
 
         self.store.expire()
+        self.record_occupancy(running)
         if self.after_prefill is not None:
             batch = self.after_prefill
             self.after_prefill = None
