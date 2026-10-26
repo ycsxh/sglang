@@ -265,7 +265,7 @@ class DecodeLocalManager:
                 expected=expected,
             )
             return False
-        text = req.tokenizer.decode(req.output_ids)
+        text = req.tokenizer.decode(req.output_ids, skip_special_tokens=True)
         decision = self.evaluate(text, t0, time.monotonic_ns(), self.config)
         self.record(
             "completion",
