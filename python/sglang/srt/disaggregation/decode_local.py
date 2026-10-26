@@ -139,6 +139,8 @@ class LeaseStore:
             restore(lease)
             del self.leases[key]
             self.bytes -= lease.size_bytes
+            self.seen.add(key + (ident["request"],))
+            self.frontiers[key] = (ident["turn"], ident["request"])
             now = self.clock()
             self.record(
                 "consume",
@@ -191,8 +193,8 @@ class LeaseStore:
 
 class DecodeLocalManager:
     def __init__(self, scheduler, config):
-        from sglang.srt.runtime_context import get_parallel
         from sglang.srt.mem_cache.chunk_cache import ChunkCache
+        from sglang.srt.runtime_context import get_parallel
 
         if scheduler.enable_overlap or not scheduler.spec_algorithm.is_none():
             raise ValueError("decode-local requires non-overlap and no speculation")
@@ -349,24 +351,15 @@ class DecodeLocalManager:
                     assert old.kv.holds_kv and old.kv.kv_committed_len == len(
                         lease.prefix
                     )
+                    indices = self.scheduler.req_to_token_pool.req_to_token[
+                        old.kv.req_pool_idx, : len(lease.prefix)
+                    ].to(dtype=__import__("torch").int64, copy=True)
                     req.kv, old.kv = old.kv, ReqKvInfo()
                     req.kv.mamba_needs_clear = False
                     req.kv.mamba_cow_src_index = None
-                    req.prefix_indices = self.scheduler.req_to_token_pool.req_to_token[
-                        req.kv.req_pool_idx, : len(lease.prefix)
-                    ].to(dtype=__import__("torch").int64, copy=True)
+                    req.prefix_indices = indices
                     req.decode_local_valid = len(lease.prefix)
                     req.decode_local_mamba_len = len(lease.prefix)
-                    self.record(
-                        "state_handoff",
-                        identity=ident,
-                        row=req.kv.req_pool_idx,
-                        full_valid=len(lease.prefix),
-                        mamba_valid=len(lease.prefix),
-                        mamba_slot=int(req.kv.mamba_pool_idx)
-                        if req.kv.holds_mamba
-                        else None,
-                    )
 
                 lease, reason, fallback = self.store.admit(
                     ident, req.origin_input_ids, capacity, restore
@@ -376,6 +369,16 @@ class DecodeLocalManager:
                     if ident["op"] == "pd":
                         self.record("pd_admit", identity=ident)
                         return False
+                    self.record(
+                        "state_handoff",
+                        identity=ident,
+                        row=req.kv.req_pool_idx,
+                        full_valid=req.decode_local_valid,
+                        mamba_valid=req.decode_local_mamba_len,
+                        mamba_slot=int(req.kv.mamba_pool_idx)
+                        if req.kv.holds_mamba
+                        else None,
+                    )
                     req.init_next_round_input()
                     self.queue.append(req)
                     self.active[req.rid] = req
@@ -388,6 +391,35 @@ class DecodeLocalManager:
         prepare_abort(req, marker + reason, status_code=409)
         self.scheduler.output_streamer.stream_output([req], req.return_logprob)
         return True
+
+    def cancel(self, abort):
+        from sglang.srt.disaggregation.utils import prepare_abort
+        from sglang.srt.managers.schedule_batch import FINISH_ABORT
+
+        def matches(req):
+            return abort.abort_all or req.rid.startswith(abort.rid)
+        for key, lease in list(self.store.leases.items()):
+            if matches(lease.owner):
+                self.store.drop(key, "cancel")
+        pending = deque()
+        for req in self.queue:
+            if matches(req):
+                prepare_abort(req, "decode-local cancelled", status_code=499)
+                self.release(req)
+                self.active.pop(req.rid, None)
+                self.scheduler.output_streamer.stream_output([req], req.return_logprob)
+                self.record(
+                    "cancelled", identity=req.decode_local_identity, queued=True
+                )
+            else:
+                pending.append(req)
+        self.queue = pending
+        for req in self.active.values():
+            if matches(req) and not req.finished():
+                req.to_finish = FINISH_ABORT("decode-local cancelled", 499)
+                self.record(
+                    "cancelled", identity=req.decode_local_identity, queued=False
+                )
 
     def next_batch(self, running):
         from sglang.srt.managers.schedule_batch import ScheduleBatch

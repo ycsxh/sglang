@@ -1117,6 +1117,17 @@ class SchedulerBatchResultProcessor:
         i: int,
         logits_output: LogitsProcessorOutput,
     ):
+        local = getattr(self.tree_cache, "decode_local_manager", None)
+        if (
+            local is not None
+            and getattr(req, "decode_local_identity", None) is not None
+        ):
+            local.record(
+                "decode_token",
+                identity=req.decode_local_identity,
+                output_tokens=len(req.output_ids),
+                committed_tokens=req.kv.kv_committed_len,
+            )
         lazy = mamba_extra_buffer_lazy_enabled()
         known_mamba_boundary = None
         completed_mamba_boundary = None
