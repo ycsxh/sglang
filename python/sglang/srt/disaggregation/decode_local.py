@@ -268,21 +268,6 @@ class DecodeLocalManager:
                 expected=expected,
             )
             return False
-        text = req.tokenizer.decode(req.output_ids, skip_special_tokens=True)
-        decision = self.evaluate(text, t0, time.monotonic_ns(), self.config)
-        self.record(
-            "completion",
-            identity=ident,
-            completed_ns=t0,
-            decision=decision,
-            valid_tokens=valid,
-            allocated_tokens=req.kv.kv_allocated_len,
-            row=req.kv.req_pool_idx,
-            mamba_slot=int(req.kv.mamba_pool_idx) if req.kv.holds_mamba else None,
-            output_ids=list(req.output_ids),
-        )
-        if not decision["pin"]:
-            return False
         # Count physical page rounding and every exclusively retained recurrent
         # slot (main + ping/pong buffers). Sizes are frozen and GPU-audited.
         page = self.scheduler.page_size
@@ -294,6 +279,24 @@ class DecodeLocalManager:
         size = (req.kv.kv_allocated_len + page - 1) // page * page * self.config[
             "kv_bytes_per_token"
         ] + (slots * self.config["mamba_bytes_per_slot"] if req.kv.holds_mamba else 0)
+        text = req.tokenizer.decode(req.output_ids, skip_special_tokens=True)
+        decision = self.evaluate(text, t0, time.monotonic_ns, self.config)
+        self.record(
+            "completion",
+            identity=ident,
+            completed_ns=t0,
+            decision=decision,
+            completion_hold_ns=time.monotonic_ns() - t0,
+            completion_hold_bytes=size,
+            asynchronous_temporary_pin_bytes=0,
+            valid_tokens=valid,
+            allocated_tokens=req.kv.kv_allocated_len,
+            row=req.kv.req_pool_idx,
+            mamba_slot=int(req.kv.mamba_pool_idx) if req.kv.holds_mamba else None,
+            output_ids=list(req.output_ids),
+        )
+        if not decision["pin"]:
+            return False
         prefix = (req.origin_input_ids + req.output_ids)[:valid]
         ok = self.store.pin(req, ident, prefix, size)
         if not ok:
@@ -398,6 +401,7 @@ class DecodeLocalManager:
 
         def matches(req):
             return abort.abort_all or req.rid.startswith(abort.rid)
+
         for key, lease in list(self.store.leases.items()):
             if matches(lease.owner):
                 self.store.drop(key, "cancel")
