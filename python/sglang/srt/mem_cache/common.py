@@ -297,6 +297,11 @@ def release_kv_cache(req: Req, tree_cache: BasePrefixCache, is_insert: bool = Tr
     # c4/c128 state pages; other ReqToTokenPool subclasses are a no-op here.
     tree_cache.req_to_token_pool.free(req)
     req.kv.mark_kv_released()
+    if manager is not None and getattr(req, "decode_local_identity", None) is not None:
+        manager.record(
+            "released", identity=req.decode_local_identity,
+            holds_kv=req.kv.holds_kv, holds_mamba=req.kv.holds_mamba,
+        )
 
 
 def _release_overallocated_kv_indices(

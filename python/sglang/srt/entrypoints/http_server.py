@@ -1630,6 +1630,24 @@ async def abort_request(obj: Annotated[AbortReq, Body()], request: Request):
         return _create_error_response(e)
 
 
+@app.post("/decode_local_abort")
+@auth_level(AuthLevel.ADMIN_OPTIONAL)
+async def decode_local_abort(obj: Annotated[AbortReq, Body()], request: Request):
+    """Cancel an exact local-continuation request even after HTTP state retired."""
+    from sglang.srt.disaggregation.decode_local import identity
+    try:
+        if not os.environ.get("SGLANG_DECODE_LOCAL_CONFIG") or obj.abort_all:
+            raise ValueError("decode-local exact-request cancellation unavailable")
+        if identity(obj.rid) is None:
+            raise ValueError("decode-local identity required")
+        # The scheduler owns leases and executions independently of the HTTP
+        # generator. The ordinary endpoint's rid_to_state guard cannot see them.
+        _global_state.tokenizer_manager._dispatch_to_scheduler(obj)
+        return Response(status_code=200)
+    except ValueError as exc:
+        return _create_error_response(exc)
+
+
 @app.post("/parse_function_call")
 async def parse_function_call_request(
     obj: Annotated[ParseFunctionCallReq, Body()], request: Request

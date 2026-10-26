@@ -235,12 +235,6 @@ class DecodeLocalManager:
 
         req.decode_local_releasing = True
         release_kv_cache(req, self.scheduler.tree_cache)
-        self.record(
-            "released",
-            rid=req.rid,
-            holds_kv=req.kv.holds_kv,
-            holds_mamba=req.kv.holds_mamba,
-        )
 
     def retain(self, req):
         ident = getattr(req, "decode_local_identity", None)

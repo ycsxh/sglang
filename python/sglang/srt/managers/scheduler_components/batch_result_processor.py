@@ -102,6 +102,17 @@ class SchedulerBatchResultProcessor:
         if use_free_group:
             self.token_to_kv_pool_allocator.free_group_begin()
         for req in batch.reqs:
+            local = getattr(self.tree_cache, "decode_local_manager", None)
+            if (
+                local is not None
+                and getattr(req, "decode_local_identity", None) is not None
+            ):
+                local.record(
+                    "decode_token",
+                    identity=req.decode_local_identity,
+                    output_tokens=len(req.output_ids),
+                    committed_tokens=req.kv.kv_committed_len,
+                )
             req.time_stats.set_decode_prebuilt_finish_time()
             req.update_finish_state()
             if req.finished():
@@ -324,6 +335,17 @@ class SchedulerBatchResultProcessor:
                     else:
                         # req output_ids are set here
                         req.output_ids.append(next_token_id)
+                        local = getattr(self.tree_cache, "decode_local_manager", None)
+                        if (
+                            local is not None
+                            and getattr(req, "decode_local_identity", None) is not None
+                        ):
+                            local.record(
+                                "decode_token",
+                                identity=req.decode_local_identity,
+                                output_tokens=len(req.output_ids),
+                                committed_tokens=req.kv.kv_committed_len,
+                            )
 
                         self._maybe_update_reasoning_tokens(req, next_token_id)
 
