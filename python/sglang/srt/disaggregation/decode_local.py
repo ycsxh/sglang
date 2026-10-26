@@ -456,6 +456,21 @@ class DecodeLocalManager:
             seen_requests=counts[5],
         )
 
+    def yield_on_idle(self):
+        """Let completion/control threads run while polling retained leases.
+
+        Never wait across a lease deadline or when local work is queued. The
+        default remains the MVP's busy polling; experiments opt in explicitly.
+        """
+        interval = self.config.get("idle_yield_ns", 0)
+        if interval <= 0 or self.queue or not self.store.leases:
+            return
+        if interval > 10_000_000:
+            raise ValueError("decode-local idle yield must be <= 10 ms")
+        now = time.monotonic_ns()
+        remaining = min(lease.expires_ns for lease in self.store.leases.values()) - now
+        time.sleep(min(interval, max(0, remaining)) / 1e9)
+
     def next_batch(self, running):
         from sglang.srt.managers.schedule_batch import ScheduleBatch
 

@@ -18,6 +18,39 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 
+def test_idle_yield_respects_expiry_and_queued_work(monkeypatch, store):
+    manager = module.DecodeLocalManager.__new__(module.DecodeLocalManager)
+    manager.config = {"idle_yield_ns": 1_000_000}
+    manager.queue = deque()
+    manager.store = store
+    store.leases["lease"] = SimpleNamespace(expires_ns=1_200_000)
+    monkeypatch.setattr(module.time, "monotonic_ns", lambda: 1_000_000)
+    waits = []
+    monkeypatch.setattr(module.time, "sleep", waits.append)
+    manager.yield_on_idle()
+    assert waits == [0.0002]
+    manager.queue.append(object())
+    manager.yield_on_idle()
+    assert waits == [0.0002]
+    manager.queue.clear()
+    store.leases["lease"].expires_ns = 999_999
+    manager.yield_on_idle()
+    assert waits == [0.0002, 0]
+    manager.config.clear()
+    manager.yield_on_idle()
+    assert waits == [0.0002, 0]
+
+
+def test_idle_yield_rejects_unbounded_poll_interval(monkeypatch, store):
+    manager = module.DecodeLocalManager.__new__(module.DecodeLocalManager)
+    manager.config = {"idle_yield_ns": 10_000_001}
+    manager.queue = deque()
+    manager.store = store
+    store.leases["lease"] = SimpleNamespace(expires_ns=10**18)
+    with pytest.raises(ValueError, match="<= 10 ms"):
+        manager.yield_on_idle()
+
+
 def test_optional_occupancy_is_bounded_and_does_not_consume_state(monkeypatch, store):
     manager = module.DecodeLocalManager.__new__(module.DecodeLocalManager)
     manager.config = {"occupancy_interval_ns": 100}

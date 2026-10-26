@@ -4498,6 +4498,7 @@ class Scheduler(
         local = getattr(self, "decode_local_manager", None)
         if local is not None and (local.store.leases or local.queue):
             self.maybe_send_health_check_signal()
+            local.yield_on_idle()
             return  # poll bounded TTLs; do not sleep across their deadlines
         # Flush any health-check signal deferred while the engine was busy.
         self.maybe_send_health_check_signal()
