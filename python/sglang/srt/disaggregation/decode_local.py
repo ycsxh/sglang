@@ -191,11 +191,12 @@ class LeaseStore:
 
 class DecodeLocalManager:
     def __init__(self, scheduler, config):
+        from sglang.srt.runtime_context import get_parallel
         from sglang.srt.mem_cache.chunk_cache import ChunkCache
 
         if scheduler.enable_overlap or not scheduler.spec_algorithm.is_none():
             raise ValueError("decode-local requires non-overlap and no speculation")
-        if scheduler.tp_size != 1 or type(scheduler.tree_cache) is not ChunkCache:
+        if get_parallel().tp_size != 1 or type(scheduler.tree_cache) is not ChunkCache:
             raise ValueError("decode-local requires TP1 exclusive ChunkCache")
         if scheduler.enable_hisparse:
             raise ValueError("decode-local does not support HiSparse")
